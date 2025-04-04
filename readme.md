@@ -63,12 +63,13 @@ Certifique-se de ter os seguintes itens instalados em seu ambiente:
 
 ### 🥗 Receitas
 - `GET /api/receitas?ingredientes=tomate,queijo` - Busca receitas com base nos ingredientes informados.
-- `GET /api/receitas/{id}` - Busca detalhes de uma receita específica pelo ID.
 - `GET /api/receitas/banco` - Busca as receitas adicionadas no banco
 
 - `POST /api/receitas/banco` - Adiciona as receitas no banco
 
 - `PUT /api/receitas/banco/{id}` - Atualiza as receitas no banco
+
+- `Delete /api/receitas/banco/{id}` - Atualiza as receitas no banco
 
 ### 🍎 Alimentos
 - `GET /api/alimento/{nome}` - Busca informações nutricionais de um alimento específico.
