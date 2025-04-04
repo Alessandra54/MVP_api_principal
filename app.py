@@ -2,101 +2,108 @@ from flask import Flask, jsonify, request
 from flask_restx import Api, Resource, fields
 import requests
 from config import Config
-from database import Database
+from database import Database, db
 
 app = Flask(__name__)
 app.config.from_object(Config)
 
-# Inicializando o banco de dados
-db = Database()
-db.init_db()
+# Inicializa banco
+database = Database()
+database.init_app(app)
+with app.app_context():
+    database.init_db(app)
 
-# Criação do Swagger
+# Swagger
 api = Api(app, doc="/swagger")
 
-# Definindo os Namespaces
-favoritas_ns = api.namespace('favoritas', description='Operações relacionadas às receitas favoritas')
+# Namespaces
+receitas_ns = api.namespace('receitas', description='Operações relacionadas a receitas')
+alimentos_ns = api.namespace('alimentos', description='Operações relacionadas a alimentos')
+categorias_ns = api.namespace('categorias', description='Operações relacionadas a categorias de refeições')
 
-# Definindo o Modelo para o Swagger
+# Modelo para criação e atualização
 receita_model = api.model('Receita', {
-    'titulo': fields.String(required=True, description='Título da receita'),
+    'nome': fields.String(required=True, description='Nome da receita'),
     'ingredientes': fields.String(required=True, description='Ingredientes da receita')
 })
 
-# Modelo de receitas favoritas no banco de dados
-class ReceitaFavorita(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    titulo = db.Column(db.String(200), nullable=False)
-    ingredientes = db.Column(db.String(500), nullable=False)
-
-# Função para chamar a API do Spoonacular
+# Função auxiliar: chamada à Spoonacular
 def chamar_api_spoonacular(endpoint, params=None):
     url = f"{app.config['BASE_URL']}/{endpoint}"
     params = params or {}
     params['apiKey'] = app.config['SPOONACULAR_API_KEY']
-    
+
     try:
         response = requests.get(url, params=params)
-        response.raise_for_status()  # Isso irá levantar uma exceção se o status for 4xx ou 5xx
-        return response.json()  # Aqui estamos retornando o JSON diretamente
+        response.raise_for_status()
+        return response.json()
     except requests.exceptions.RequestException as e:
-        # Retornando um erro com o código 500 se houver falha ao chamar a API
         return {"error": str(e)}, 500
 
-# Endpoint para adicionar e listar receitas favoritas
-@favoritas_ns.route('/')
-class ReceitaFavoritaLista(Resource):
-    @api.doc('Listar todas as receitas favoritas')
+# 🔹 GET receitas por ingredientes (Spoonacular)
+@receitas_ns.route('/')
+class BuscarReceitas(Resource):
+    @api.doc('Buscar receitas por ingredientes')
+    @api.param('ingredientes', 'Lista de ingredientes separados por vírgula')
     def get(self):
-        try:
-            receitas = ReceitaFavorita.query.all()
-            resultado = [{"id": r.id, "titulo": r.titulo, "ingredientes": r.ingredientes} for r in receitas]
-            return jsonify(resultado)
-        except Exception as e:
-            return jsonify({"error": str(e)}), 500
+        ingredientes = request.args.get('ingredientes')
+        if not ingredientes:
+            return jsonify({"error": "Parâmetro 'ingredientes' é necessário"}), 400
 
-    @api.doc('Adicionar uma nova receita favorita')
+        params = {'ingredients': ingredientes, 'number': 5}
+        dados = chamar_api_spoonacular('recipes/findByIngredients', params)
+        return jsonify(dados)
+
+
+
+# 🔹 GET categorias (mock local)
+@categorias_ns.route('/')
+class ListarCategorias(Resource):
+    @api.doc('Listar categorias de refeições')
+    def get(self):
+        categorias = [
+            "Café da manhã", "Almoço", "Jantar", "Sobremesa", "Lanche"
+        ]
+        return jsonify(categorias)
+
+# 🔹 GET dados nutricionais por alimento (Spoonacular)
+@alimentos_ns.route('/<string:nome>')
+class BuscarAlimento(Resource):
+    @api.doc('Buscar informações nutricionais de um alimento')
+    def get(self, nome):
+        params = {'query': nome}
+        dados = chamar_api_spoonacular('food/search', params)
+        return jsonify(dados)
+
+# 🔹 GET e POST banco local
+@receitas_ns.route('/banco')
+class ReceitaBanco(Resource):
+    @api.doc('Listar todas as receitas do banco de dados')
+    def get(self):
+        receitas = database.get_receitas()
+        return jsonify(receitas)
+
+    @api.doc('Adicionar uma nova receita ao banco de dados')
     @api.expect(receita_model)
     def post(self):
-        try:
-            dados = request.json
-            if not dados or 'titulo' not in dados or 'ingredientes' not in dados:
-                return jsonify({"error": "Campos 'titulo' e 'ingredientes' são obrigatórios"}), 400
+        data = request.json
+        database.add_receita(data['nome'], data['ingredientes'])
+        return jsonify({"message": "Receita adicionada com sucesso!"})
 
-            nova_receita = ReceitaFavorita(titulo=dados['titulo'], ingredientes=dados['ingredientes'])
-            db.session.add(nova_receita)
-            db.session.commit()
+# 🔹 PUT e DELETE banco local
+@receitas_ns.route('/banco/<int:id>')
+class ReceitaBancoDetalhes(Resource):
+    @api.doc('Atualizar uma receita no banco de dados')
+    @api.expect(receita_model)
+    def put(self, id):
+        data = request.json
+        database.update_receita(id, data['nome'], data['ingredientes'])
+        return jsonify({"message": "Receita atualizada com sucesso!"})
 
-            return jsonify({"message": "Receita adicionada com sucesso!"}), 201
-        except Exception as e:
-            # Exibindo mensagem de erro para ajudar a depurar
-            return jsonify({"error": "Erro ao adicionar a receita", "details": str(e)}), 500
-
-# Endpoint para buscar e deletar uma receita favorita por ID
-@favoritas_ns.route('/<int:id>')
-class ReceitaFavoritaDetalhe(Resource):
-    @api.doc('Buscar uma receita favorita pelo ID')
-    def get(self, id):
-        try:
-            receita = ReceitaFavorita.query.get(id)
-            if not receita:
-                return jsonify({"error": "Receita não encontrada"}), 404
-            return jsonify({"id": receita.id, "titulo": receita.titulo, "ingredientes": receita.ingredientes})
-        except Exception as e:
-            return jsonify({"error": str(e)}), 500
-
-    @api.doc('Remover uma receita favorita pelo ID')
+    @api.doc('Deletar uma receita do banco de dados')
     def delete(self, id):
-        try:
-            receita = ReceitaFavorita.query.get(id)
-            if not receita:
-                return jsonify({"error": "Receita não encontrada"}), 404
-            
-            db.session.delete(receita)
-            db.session.commit()
-            return jsonify({"message": "Receita removida com sucesso!"})
-        except Exception as e:
-            return jsonify({"error": str(e)}), 500
+        database.delete_receita(id)
+        return jsonify({"message": "Receita deletada com sucesso!"})
 
 if __name__ == '__main__':
-    app.run(debug=True, host='0.0.0.0', port=5001)
+    app.run(debug=True, host='0.0.0.0', port=5000)
